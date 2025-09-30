@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Camel Up</title>
+<style>
+body { font-family: sans-serif; padding: 20px; }
+.board { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.square { flex: 0 0 60px; border: 1px solid #aaa; min-height: 60px; padding: 2px; display: flex; flex-direction: column-reverse; align-items: center; position: relative; }
+.square h4 { margin: 2px 0; font-size: 12px; }
+.camel { width: 40px; height: 40px; margin: 2px 0; border-radius: 50%; cursor: grab; border: 2px solid #333; flex-shrink: 0; }
+.camel.red { background: crimson; }
+.camel.blue { background: royalblue; }
+.camel.green { background: seagreen; }
+.camel.yellow { background: goldenrod; }
+.camel.purple { background: purple; }
+.camel.black { background: black; }
+.camel.white { background: white; }
+.tile-select { margin-top: auto; font-size: 10px; }
+.camel-pool { margin-bottom: 20px; display: flex; gap: 6px; flex-wrap: wrap; min-height: 60px; border: 1px dashed #aaa; padding: 4px; }
+.dice { margin-top: 20px; }
+.dice label { margin-right: 10px; }
+.drop-zone { width: 100%; margin: 2px 0; flex-grow: 1; min-height: 20px; }
+.drop-zone.full { flex-grow: 1; min-height: 40px; }
+.drop-zone.active { background: rgba(0,0,0,0.2); border-radius: 4px; }
+table { border-collapse: collapse; margin-top: 20px; }
+td, th { border: 1px solid #333; padding: 4px 8px; text-align: center; }
+pre { white-space: pre-wrap; max-height: 300px; overflow-y: auto; background:#f5f5f5; padding:6px; display:none; }
+button.toggle-debug { margin-top: 10px; }
+#timing { font-weight: bold; margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<h1>Camel Up</h1>
+
+<div class="camel-pool" id="camel-pool"></div>
+<div class="board" id="board"></div>
+
+<div class="dice">
+  <h2>Dice Rolled</h2>
+  <div>
+    <label><input type="checkbox" name="die-red"> Red</label>
+    <label><input type="checkbox" name="die-yellow"> Yellow</label>
+    <label><input type="checkbox" name="die-green"> Green</label>
+    <label><input type="checkbox" name="die-blue"> Blue</label>
+    <label><input type="checkbox" name="die-purple"> Purple</label>
+    <label><input type="checkbox" name="die-gray"> Gray</label>
+  </div>
+</div>
+
+<button id="analyze">Analyze State</button>
+<button id="reset">Reset</button>
+<button class="toggle-debug" id="toggle-debug">Show/Hide Debug Output</button>
+
+<div id="timing"></div>
+<div id="ranking-table"></div>
+<div id="square-table"></div>
+<div id="betting-table"></div>
+<pre id="debug-output"></pre>
+
+<script>
+const camelColors = ["red","yellow","green","blue","purple","black","white"];
+const pool = document.getElementById("camel-pool");
+const boardDiv = document.getElementById("board");
+
+function populatePool() {
+  pool.innerHTML = "";
+  camelColors.forEach(c => {
+    const camel = document.createElement("div");
+    camel.className = `camel ${c}`;
+    camel.draggable = true;
+    camel.dataset.color = c;
+    pool.appendChild(camel);
+  });
+}
+populatePool();
+
+for(let i=1;i<=16;i++){
+  const square = document.createElement("div");
+  square.className="square";
+  square.dataset.square=i;
+  const title = document.createElement("h4");
+  title.textContent=i;
+  square.appendChild(title);
+  square.appendChild(createDropZone(true));
+  const select = document.createElement("select");
+  select.className="tile-select";
+  select.name=`square${i}-tile`;
+  ["None","+1","-1"].forEach(opt=>{
+    const option=document.createElement("option");
+    option.value=opt; option.textContent=opt;
+    select.appendChild(option);
+  });
+  square.appendChild(select);
+  boardDiv.appendChild(square);
+}
+
+// Drag & drop
+let dragSrc=null;
+function createDropZone(full=false){
+  const dz=document.createElement("div");
+  dz.className="drop-zone"+(full?" full":"");
+  dz.addEventListener("dragover",e=>{ e.preventDefault(); dz.classList.add("active"); });
+  dz.addEventListener("dragleave",()=>dz.classList.remove("active"));
+  dz.addEventListener("drop",e=>{
+    e.preventDefault();
+    dz.classList.remove("active");
+    if(dragSrc){ dz.parentNode.insertBefore(dragSrc,dz.nextSibling); }
+    cleanupDropZones(dz.parentNode);
+  });
+  return dz;
+}
+function cleanupDropZones(square){
+  const camels=Array.from(square.querySelectorAll(".camel"));
+  square.querySelectorAll(".drop-zone").forEach(dz=>dz.remove());
+  if(camels.length===0) square.insertBefore(createDropZone(true),square.querySelector(".tile-select"));
+  else{
+    camels.forEach(camel=>{ square.insertBefore(createDropZone(),camel); });
+    square.insertBefore(createDropZone(),square.querySelector(".tile-select"));
+  }
+}
+function cleanupAllSquares(){ document.querySelectorAll(".square").forEach(cleanupDropZones); }
+
+document.addEventListener("dragstart",e=>{
+  if(e.target.classList.contains("camel")){
+    dragSrc=e.target;
+    e.dataTransfer.setData("color", e.target.dataset.color);
+    setTimeout(()=>e.target.style.display="none",0);
+  }
+});
+document.addEventListener("dragend",e=>{
+  if(dragSrc) dragSrc.style.display="";
+  dragSrc=null;
+  document.querySelectorAll(".drop-zone").forEach(dz=>dz.classList.remove("active"));
+});
+pool.addEventListener("dragover",e=>e.preventDefault());
+pool.addEventListener("drop",e=>{
+  e.preventDefault();
+  if(dragSrc){
+    const color=dragSrc.dataset.color;
+    dragSrc.remove();
+    const insertIndex = camelColors.indexOf(color);
+    let inserted=false;
+    for(let i=0;i<pool.children.length;i++){
+      if(camelColors.indexOf(pool.children[i].dataset.color)>insertIndex){
+        pool.insertBefore(dragSrc,pool.children[i]);
+        inserted=true; break;
+      }
+    }
+    if(!inserted) pool.appendChild(dragSrc);
+    cleanupAllSquares();
+  }
+});
+
+document.getElementById("reset").addEventListener("click",()=>{
+  populatePool();
+  document.querySelectorAll(".square .camel").forEach(c=>c.remove());
+  cleanupAllSquares();
+  document.querySelectorAll(".tile-select").forEach(s=>s.value="None");
+  document.querySelectorAll(".dice input[type=checkbox]").forEach(cb=>cb.checked=false);
+  document.getElementById("ranking-table").innerHTML="";
+  document.getElementById("square-table").innerHTML="";
+  document.getElementById("betting-table").innerHTML="";
+  document.getElementById("debug-output").textContent="";
+  document.getElementById("timing").textContent="";
+});
+
+document.getElementById("toggle-debug").addEventListener("click",()=>{
+  const pre=document.getElementById("debug-output");
+  pre.style.display = (pre.style.display==="none" || pre.style.display==="")?"block":"none";
+});
+
+function getBoardState(){
+  const board=[];
+  for(let i=1;i<=16;i++){
+    const sq=document.querySelector(`.square[data-square='${i}']`);
+    const camels=Array.from(sq.querySelectorAll(".camel")).map(c=>c.dataset.color);
+    board.push(camels);
+  }
+  const tiles=Array.from(document.querySelectorAll(".square select")).map(s=>s.value);
+  const diceLeft=[];
+  ["red","yellow","green","blue","purple","gray"].forEach(c=>{
+    if(!document.querySelector(`[name='die-${c}']`).checked) diceLeft.push(c);
+  });
+  return {board, tiles, diceLeft};
+}
+
+// moveCamel with proper black/white reversed tile behavior
+function moveCamel(board, camel, steps, tiles){
+  const fromIndex = board.findIndex(sq => sq.includes(camel));
+  const camelPos = board[fromIndex].indexOf(camel);
+  const movingStack = board[fromIndex].slice(camelPos);
+  board[fromIndex] = board[fromIndex].slice(0, camelPos);
+
+  let target = fromIndex + steps;
+  if(target < 0) target = 0;
+  if(target >= 16){
+    board[15] = [...board[15], ...movingStack];
+    return { board, finished:true };
+  }
+
+  board[target] = [...board[target], ...movingStack];
+
+  let tile = tiles[target];
+  if(tile === "+1" || tile === "-1"){
+    let tileStep;
+    if(tile === "+1") tileStep = (camel==="black"||camel==="white") ? -1 : 1;
+    else tileStep = (camel==="black"||camel==="white") ? 1 : -1;
+
+    let newTarget = target + tileStep;
+    if(newTarget < 0) newTarget = 0;
+    if(newTarget > 15) newTarget = 15;
+
+    const stackToMove = board[target].slice(-movingStack.length);
+    board[target] = board[target].slice(0, -movingStack.length);
+
+    // Determine stacking based on tile type
+    if(tile === "+1") board[newTarget] = [...board[newTarget], ...stackToMove]; // top
+    else board[newTarget] = [...stackToMove, ...board[newTarget]]; // bottom
+  }
+
+  return { board, finished:false };
+}
+
+function permute(arr){
+  if(arr.length<=1) return [arr];
+  const res=[];
+  arr.forEach((el,i)=>{
+    const rest=[...arr.slice(0,i), ...arr.slice(i+1)];
+    permute(rest).forEach(p=> res.push([el,...p]));
+  });
+  return res;
+}
+
+function simulateAllDicePermutations(board, tiles, remainingDice){
+  const dicePermutations = permute(remainingDice);
+  const camels=["red","yellow","green","blue","purple"];
+  const rankings={}, squareCounts={}, sequences=[];
+  camels.forEach(c=>{ rankings[c]=[0,0,0,0,0]; squareCounts[c]=Array(16).fill(0); });
+  let totalOutcomes=0;
+
+  function cloneBoard(b){ return b.map(sq=>[...sq]); }
+  function recordBoard(b){
+    const positions=[];
+    b.forEach((sq,idx)=>{ sq.forEach((c,pos)=>{ if(camels.includes(c)) positions.push({camel:c,square:idx,stackPos:pos}); }); });
+    positions.sort((a,b)=> b.square - a.square || b.stackPos - a.stackPos);
+    positions.forEach((p,i)=>rankings[p.camel][i]++);
+    positions.forEach(p=>squareCounts[p.camel][p.square]++);
+  }
+
+  dicePermutations.forEach(seq=>{
+    function recurse(b,diceLeft,sequence, skipLast=true,finished=false){
+      if(diceLeft.length===0){
+        totalOutcomes++;
+        sequences.push({seq: sequence, finalBoard: cloneBoard(b)});
+        recordBoard(b);
+        return;
+      }
+      const die=diceLeft[0], rest=diceLeft.slice(1);
+      const isLast = diceLeft.length===1;
+      const skipActionNow = ( skipLast && isLast ) || finished ;
+      const movesForDie = die==="gray" ? 
+        [["black",-1],["black",-2],["black",-3],["white",-1],["white",-2],["white",-3]] :
+        [[die,1],[die,2],[die,3]];
+      movesForDie.forEach(([camel,steps])=>{
+        const nb=cloneBoard(b);
+        if(!skipActionNow) {
+			ans = moveCamel(nb, camel, steps, tiles);
+			finished = ans.finished;
+		}
+        recurse(nb, rest, [...sequence, `${camel} moves ${steps}${skipActionNow?' (skipped)':''}`], skipLast , finished);
+      });
+    }
+    recurse(cloneBoard(board),seq,[]);
+  });
+  return {rankings, squareCounts, totalOutcomes, sequences};
+}
+
+function getColor(pct){ const g=Math.round(255*pct); return `rgb(${255-g},255,${255-g})`; }
+function getBettingColor(val,X){
+  if(val<=0){
+    const t=(val+1)/1; const r=255,g=Math.round(255*t),b=Math.round(255*t); return `rgb(${r},${g},${b})`;
+  } else {
+    const t=val/X; const r=Math.round(255*(1-t)),g=255,b=Math.round(255*(1-t)); return `rgb(${r},${g},${b})`;
+  }
+}
+
+function displayRankingTable(rankings,total){
+  const table=document.createElement("table");
+  const header=document.createElement("tr");
+  header.innerHTML="<th>Camel</th><th>1st</th><th>2nd</th><th>3rd</th><th>4th</th><th>5th</th>";
+  table.appendChild(header);
+  for(const c in rankings){
+    const row=document.createElement("tr");
+    row.innerHTML=`<td>${c}</td>`+
+      rankings[c].map(A=>{ const pct=A/total; return `<td style="background-color:${getColor(pct)}">${A}/${total} (${(pct*100).toFixed(1)}%)</td>`; }).join("");
+    table.appendChild(row);
+  }
+  document.getElementById("ranking-table").innerHTML=""; 
+  document.getElementById("ranking-table").appendChild(table);
+}
+
+function displaySquareTable(squareCounts,total){
+  const table=document.createElement("table");
+  const header=document.createElement("tr");
+  header.innerHTML="<th>Camel</th>"+Array.from({length:16},(_,i)=>`<th>Sq ${i+1}</th>`).join("");
+  table.appendChild(header);
+  for(const c in squareCounts){
+    const row=document.createElement("tr");
+    row.innerHTML=`<td>${c}</td>`+
+      squareCounts[c].map(A=>{ const pct=A/total; return `<td style="background-color:${getColor(pct)}">${A}/${total} (${(pct*100).toFixed(1)}%)</td>`; }).join("");
+    table.appendChild(row);
+  }
+  document.getElementById("square-table").innerHTML=""; 
+  document.getElementById("square-table").appendChild(table);
+}
+
+function displayBettingTable(rankings,total){
+  const table=document.createElement("table");
+  const header=document.createElement("tr");
+  header.innerHTML="<th>Camel</th><th>5</th><th>3</th><th>2</th>";
+  table.appendChild(header);
+  for(const c in rankings){
+    const row=document.createElement("tr");
+    const rowHTML=[`<td>${c}</td>`];
+    [5,3,2].forEach(X=>{
+      const val = rankings[c][0]*X/total + rankings[c][1]*1/total - (rankings[c].slice(2).reduce((a,b)=>a+b,0))/total;
+      rowHTML.push(`<td style="background-color:${getBettingColor(val,X)}">${val.toFixed(2)}</td>`);
+    });
+    row.innerHTML=rowHTML.join("");
+    table.appendChild(row);
+  }
+  document.getElementById("betting-table").innerHTML=""; 
+  document.getElementById("betting-table").appendChild(table);
+}
+
+function displayDebugOutput(sequences){
+  const pre=document.getElementById("debug-output");
+  pre.textContent = sequences.map(s=>`Sequence: ${s.seq.join(" -> ")} | Final Board: ${JSON.stringify(s.finalBoard)}`).join("\n");
+}
+
+// Validation before analyze
+document.getElementById("analyze").addEventListener("click",()=>{
+  const poolCamels = Array.from(pool.querySelectorAll(".camel")).length;
+  if(poolCamels>0){ alert("All camels must be placed on the board!"); return; }
+  const squares = document.querySelectorAll(".square");
+  for(let i=0;i<squares.length;i++){
+    const tileVal = squares[i].querySelector(".tile-select").value;
+    const camels = squares[i].querySelectorAll(".camel").length;
+    if(camels>0 && tileVal!=="None"){ alert("No square may have both camels and a non-None tile."); return; }
+    if(i<15){
+      const nextTile = squares[i+1].querySelector(".tile-select").value;
+      if(tileVal!=="None" && nextTile!=="None"){ alert("No two adjacent squares may have tiles."); return; }
+    }
+  }
+  const start = performance.now();
+  const {board, tiles, diceLeft}=getBoardState();
+  const {rankings, squareCounts, totalOutcomes, sequences} = simulateAllDicePermutations(board, tiles, diceLeft);
+  displayRankingTable(rankings,totalOutcomes);
+  displaySquareTable(squareCounts,totalOutcomes);
+  displayBettingTable(rankings,totalOutcomes);
+  displayDebugOutput(sequences);
+  const end = performance.now();
+  document.getElementById("timing").textContent = `Analysis completed in ${(end-start).toFixed(2)} ms`;
+});
+
+</script>
+</body>
+</html>

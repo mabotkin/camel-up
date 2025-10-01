@@ -17,7 +17,7 @@ body { font-family: sans-serif; padding: 20px; }
 .camel.black { background: black; }
 .camel.white { background: white; }
 .tile-select { margin-top: auto; font-size: 10px; }
-.camel-pool { margin-bottom: 20px; display: flex; gap: 6px; flex-wrap: wrap; min-height: 60px; border: 1px dashed #aaa; padding: 4px; }
+.camel-pool { margin-bottom: 20px; display: flex; gap: 6px; flex-wrap: wrap; width: 344px; height: 48px; border: 1px dashed #aaa; padding: 4px; }
 .dice { margin-top: 20px; }
 .dice label { margin-right: 10px; }
 .drop-zone { width: 100%; margin: 2px 0; flex-grow: 1; min-height: 20px; }
@@ -133,6 +133,7 @@ document.addEventListener("dragend",e=>{
   if(dragSrc) dragSrc.style.display="";
   dragSrc=null;
   document.querySelectorAll(".drop-zone").forEach(dz=>dz.classList.remove("active"));
+  cleanupAllSquares();
 });
 pool.addEventListener("dragover",e=>e.preventDefault());
 pool.addEventListener("drop",e=>{
@@ -233,6 +234,34 @@ function permute(arr){
   return res;
 }
 
+function getGreyDieOutcomes(board) {
+  const blackIndex = board.findIndex(sq => sq.includes("black"));
+  const whiteIndex = board.findIndex(sq => sq.includes("white"));
+  const blackPos = board[blackIndex].indexOf("black");
+  const whitePos = board[whiteIndex].indexOf("white");
+  const blackHasAbove = blackIndex >= 0 && board[blackIndex].slice(board[blackIndex].indexOf("black")+1).length > 0;
+  const whiteHasAbove = whiteIndex >= 0 && board[whiteIndex].slice(board[whiteIndex].indexOf("white")+1).length > 0;
+
+  // Rule 2: If stacked together, topmost moves, this also removes stacked together case from other rule
+  if(blackIndex === whiteIndex && Math.abs(blackPos - whitePos) === 1) {
+  	const camelToMove = blackPos > whitePos ? "black" : "white";
+    return [[camelToMove,-1],[camelToMove,-2],[camelToMove,-3],[camelToMove,-1],[camelToMove,-2],[camelToMove,-3]];
+  }
+
+  // Rule 1: If only one has camels above, that one must move
+  if(blackHasAbove && !whiteHasAbove) {
+  	const camelToMove = "black";
+    return [[camelToMove,-1],[camelToMove,-2],[camelToMove,-3],[camelToMove,-1],[camelToMove,-2],[camelToMove,-3]];
+  }
+  if(whiteHasAbove && !blackHasAbove) {
+  	const camelToMove = "white";
+    return [[camelToMove,-1],[camelToMove,-2],[camelToMove,-3],[camelToMove,-1],[camelToMove,-2],[camelToMove,-3]];
+  }
+
+  // Default: 50/50 black or white
+  return [["black",-1],["black",-2],["black",-3],["white",-1],["white",-2],["white",-3]];
+}
+
 function simulateAllDicePermutations(board, tiles, remainingDice){
   const dicePermutations = permute(remainingDice);
   const camels=["red","yellow","green","blue","purple"];
@@ -261,7 +290,7 @@ function simulateAllDicePermutations(board, tiles, remainingDice){
       const isLast = diceLeft.length===1;
       const skipActionNow = ( skipLast && isLast ) || finished ;
       const movesForDie = die==="gray" ? 
-        [["black",-1],["black",-2],["black",-3],["white",-1],["white",-2],["white",-3]] :
+        getGreyDieOutcomes( b ) :
         [[die,1],[die,2],[die,3]];
       movesForDie.forEach(([camel,steps])=>{
         const nb=cloneBoard(b);
